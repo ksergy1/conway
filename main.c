@@ -74,7 +74,7 @@ value_t brute_force(value_t A, int width)
   value_t B;
 
   for (B = 0;
-       (!(conway(A, B) > 0.5)) && (B < limit);
+       (!(conway(A, B, width) > 0.5)) && (B < limit);
        ++B);
 
   return B;
@@ -114,7 +114,7 @@ int main(int argc, char **argv)
     bg_init(&bg, width);
 
     do {
-      bits = bg_next_bit(bg);
+      bits = bg_next_bit(&bg);
       output(A, B, bits, width);
       kp = keypress();
     } while ((kp != ESC) &&
@@ -123,7 +123,7 @@ int main(int argc, char **argv)
                (B != bits->value))));
 
     kp = keypress();
-  } (kp != ESC);
+  } while (kp != ESC);
 
   return 0;
 }
