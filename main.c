@@ -204,7 +204,7 @@ const Bits_t *bg_next_bit(Bit_generator_t *bg)
 
 value_t random_bit(void)
 {
-  return random() > (RAND_MAX >> 0x01);
+  return random() & 0x01;// > (RAND_MAX >> 0x01);
 }
 
 value_t random_value(int width)
