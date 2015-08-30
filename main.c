@@ -84,11 +84,11 @@ int keypress(void);
 // с заданным форматом и доведением до минимальной ширины (если width < min_width)
 void output_single(char prefix, int color, int bold_count, value_t value, int width, int min_width);
 // вывод
-void output(value_t A, value_t B, const Bits_t *bits, int width);
+void output(value_t A, value_t B, int bold_A, int bold_B, const Bits_t *bits, int width);
 
 // сравнить заданное начение с тестовым кортежем.
 // На выходе - длина равных битов начиная от старшего
-int compare(value_t value, const Bits_t *bits, int width);
+int compare(value_t value, int value_width, const Bits_t *bits);
 
 void reset_input_mode(void);
 void setup_terminal(void);
@@ -205,7 +205,7 @@ void output_single(char prefix, int color, int bold_count, value_t value, int wi
   printf("LSB" ESC_PREFIX "%d" COLOR_SUFFIX "\n", RESET);
 }
 
-int compare(value_t value, const Bits_t *bits, int width)
+int compare(value_t value, int value_width, const Bits_t *bits)
 {
   int idx;
   int length;
@@ -214,7 +214,7 @@ int compare(value_t value, const Bits_t *bits, int width)
   value_t bit_value, bit_test;
 
   for (idx = 0, length = 0; idx < bc; ++idx) {
-    bit_value = fetch_bit(value, width - idx - 1);
+    bit_value = fetch_bit(value, value_width - idx - 1);
     bit_test = fetch_bit(bv, bc - idx - 1);
 
     if (bit_value == bit_test) {
@@ -228,19 +228,14 @@ int compare(value_t value, const Bits_t *bits, int width)
   return length;
 }
 
-void output(value_t A, value_t B, const Bits_t *bits, int width)
+void output(value_t A, value_t B, int bold_A, int bold_B, const Bits_t *bits, int width)
 {
-  int len_A, len_B;
-
   printf(CLEAR_SCREEN);
   printf(CURSOR_TO_UL);
 
-  len_A = compare(A, bits, width);
-  len_B = compare(B, bits, width);
-
-  output_single('A', FG_RED, len_A, A, width, width);
+  output_single('A', FG_RED, bold_A, A, width, width);
   output_single(' ', RESET, 0, bits->value, bits->bits_count, width);
-  output_single('B', FG_GREEN, len_B, B, width, width);
+  output_single('B', FG_GREEN, bold_B, B, width, width);
 }
 
 int keypress()
@@ -291,6 +286,7 @@ int main(int argc, char **argv)
   value_t B;
   int kp;
   int width;
+  int len_A, len_B;
   Bit_generator_t bg;
   const Bits_t *bits;
   char *end;
@@ -320,13 +316,15 @@ int main(int argc, char **argv)
 
     do {
       bits = bg_next_bit(&bg);
-      output(A, B, bits, width);
+      len_A = compare(A, width, bits);
+      len_B = compare(B, width, bits);
+      output(A, B, len_A, len_B, bits, width);
 
-      if (bits->bits_count == width && A == bits->value) {
+      if (len_A == width) {
         printf("Finish: A\n");
         break;
       }
-      if (bits->bits_count == width && B == bits->value) {
+      if (len_B == width) {
         printf("Finish: B\n");
         break;
       }
