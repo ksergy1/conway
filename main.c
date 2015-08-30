@@ -337,10 +337,10 @@ int main(int argc, char **argv)
   LogPrint("A: %#x, B: %#x", A, B);
 #endif
 
-  do {
-    A = random_value(width);
-    B = brute_force(A, width);
+  A = random_value(width);
+  B = brute_force(A, width);
 
+  do {
     bg_init(&bg, width);
 
     do {
