@@ -1,2 +1,2 @@
 all:
-	gcc -o conway.bin main.c
+	gcc -static main.c -L. -lcursor -o conway.bin

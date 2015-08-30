@@ -9,63 +9,17 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 
+#include "cursor.h"
+
 #if 0
 #define LogPrint(fmt,...) do { fprintf(stderr, fmt "\n", ##__VA_ARGS__); } while(0)
 #else
 #define LogPrint(fmt, ...)
 #endif
 
-#define ESC                   '\033'
-#define END_OF_FILE           '\004'
-#define ESC_PREFIX            "\x1b["
-#define ESC_DELIMITER         ";"
-
-#define COLOR_SUFFIX          "m"
-#define CURSOR_POSITION_SUFIX "f"
-#define CURSOR_FORWARD_SUFFIX "C"
-#define CURSOR_DOWN_SUFFIX    "B"
-#define CURSOR_UP_SUFFIX      "A"
-#define CURSOR_BACK_SUFFIX    "D"
-
-#define SAVE_CURSOR_POSITION  "\x1b[s"
-#define REST_CURSOR_POSITION  "\x1b[u"
-
-#define CURSOR_TO_UL          "\x1b[1;1f"
-#define CURSOR_TO_LINE_START  "\x1b[1G"
-
-#define CLEAR_SCREEN          "\x1b[2J"
-#define CLEAR_LINE            "\x1b[2K"
-#define CLEAR_LINE_BEFORE     "\x1b[1K"
-
-#define COLOR(x)              "\x1b["#x"m"
-
 #define NEW_LINE              "\n"
-
-/* Not usable. Reference only. */
-#define RESET                 0
-#define BOLD                  1
-#define FAINT                 2
-#define ITALIC                3
-#define UNDERLINE             4
-
-#define FG_RED                31
-#define FG_GREEN              32
-#define FG_YELLOW             33
-#define FG_BLUE               34
-#define FG_MAGENTA            35
-#define FG_CYAN               36
-#define FG_WHITE              37
-#define FG_DEFAULT            39
-
-#define BG_RED                41
-#define BG_GREEN              42
-#define BG_YELLOW             43
-#define BG_BLUE               44
-#define BG_MAGENTA            45
-#define BG_CYAN               46
-#define BG_WHITE              47
-#define BG_DEFAULT            49
-
+#define ESC                   '\033'
+#define END_OF_FIL            '\004'
 /**** types ****/
 typedef uint64_t value_t;
 typedef struct {
@@ -252,18 +206,19 @@ void output_single(char prefix, int color, int bold_count, int shift, value_t va
   value_t bit;
   char ch;
 
-  printf(ESC_PREFIX "%d" CURSOR_FORWARD_SUFFIX, shift);
-  printf(ESC_PREFIX "%d" COLOR_SUFFIX "%c MSB ", color, prefix);
+  cursor_move_by(shift, 0);
+  set_fg_color(color);
 
-  printf(ESC_PREFIX "%d" COLOR_SUFFIX, BOLD);
+  printf("%c MSB ", prefix);
+
+  add_font_attributes(a_bold);
   for (idx = width - 1; idx > width - 1 - bold_count; --idx) {
     bit = fetch_bit(value, idx);
     ch = BIT_CHAR[bit];
     printf("%c ", ch);
   }
 
-  printf(ESC_PREFIX "%d" COLOR_SUFFIX, RESET);
-  printf(ESC_PREFIX "%d" COLOR_SUFFIX, color);
+  remove_font_attributes(a_bold);
 
   for (; idx > -1; --idx) {
     bit = fetch_bit(value, idx);
@@ -275,7 +230,9 @@ void output_single(char prefix, int color, int bold_count, int shift, value_t va
     printf("  ");
   }
 
-  printf("LSB" ESC_PREFIX "%d" COLOR_SUFFIX, RESET);
+  printf("LSB");
+
+  reset_font_attributes();
 }
 
 void output(value_t A, value_t B, int bold_A, int bold_B, const Bits_t *bits, int width)
@@ -286,11 +243,11 @@ void output(value_t A, value_t B, int bold_A, int bold_B, const Bits_t *bits, in
            output_terminal_winsize_.ws_row / 4,
            1);
   */
-  output_single('A', FG_RED, bold_A, horiz_shift, A, width, width);
+  output_single('A', c_red, bold_A, horiz_shift, A, width, width);
   printf(NEW_LINE);
-  output_single(' ', RESET, 0, horiz_shift, bits->value, bits->bits_count, width);
+  output_single(' ', c_dflt, 0, horiz_shift, bits->value, bits->bits_count, width);
   printf(" <== next bit" NEW_LINE);
-  output_single('B', FG_GREEN, bold_B, horiz_shift, B, width, width);
+  output_single('B', c_green, bold_B, horiz_shift, B, width, width);
   printf(NEW_LINE);
 }
 
@@ -300,7 +257,7 @@ int output_lead_number(const char *prefix, int shift, value_t LN, int width)
   char ch;
   value_t bit;
 
-  printf(ESC_PREFIX "%d" CURSOR_FORWARD_SUFFIX, shift);
+  cursor_move_by(shift, 0);
   printf("%s MSB ", prefix);
 
   for (idx = width - 1; idx > -1; --idx) {
@@ -316,8 +273,9 @@ int output_lead_number(const char *prefix, int shift, value_t LN, int width)
 
 void output_chances(const char *prefix, int shift, value_t num, value_t denom)
 {
-  printf(ESC_PREFIX "%d" CURSOR_FORWARD_SUFFIX "%s %lu / %lu",
-         shift, prefix, (unsigned long)num, (unsigned long)denom);
+  cursor_move_by(shift, 0);
+  printf("%s %lu / %lu",
+         prefix, (unsigned long)num, (unsigned long)denom);
 }
 
 int keypress()
@@ -334,6 +292,7 @@ int keypress()
 
 void at_exit(void)
 {
+  cursor_set_position(1, output_terminal_winsize_.ws_row - 1);
   printf(ESC_PREFIX "%d" ESC_DELIMITER "%d" CURSOR_POSITION_SUFIX,
          output_terminal_winsize_.ws_row - 1, 1);
   printf("Exiting\n");
@@ -412,12 +371,17 @@ int main(int argc, char **argv)
     }
   }
 
+  if (!cursor_init()) {
+    perror("cursor_init");
+    exit(EXIT_FAILURE);
+  }
+
   atexit(at_exit);
 
   setup_output_terminal();
   setup_input_terminal();
 
-  printf(CLEAR_SCREEN);
+  clear_screen();
 
   random_init();
 #if 0
@@ -439,16 +403,16 @@ int main(int argc, char **argv)
   chances_denom = BB - BA;
 
   do {
-    printf(CURSOR_TO_UL);
-    printf(ESC_PREFIX "%d" ESC_DELIMITER "%d" CURSOR_POSITION_SUFIX,
-           output_terminal_winsize_.ws_row / 8, 1);
+    //cursor_set_position(1, 1);
+
+    cursor_set_position(1, output_terminal_winsize_.ws_row / 8);
 
     lead_number_line_len = output_lead_number("AA", output_terminal_winsize_.ws_col / 8, AA, width);
     printf(NEW_LINE);
     output_lead_number("AB", output_terminal_winsize_.ws_col / 8, AB, width);
 
-    printf(ESC_PREFIX "%d" CURSOR_UP_SUFFIX, 1);
-    printf(CURSOR_TO_LINE_START);
+    cursor_move_by(0, -1);
+    cursor_to_line_start();
 
     output_lead_number("BB", output_terminal_winsize_.ws_col / 8 + lead_number_line_len + 3, BB, width);
     printf(NEW_LINE);
@@ -456,21 +420,23 @@ int main(int argc, char **argv)
     printf(NEW_LINE);
 
     printf(NEW_LINE);
-    printf(CURSOR_TO_LINE_START);
+
+    cursor_to_line_start();
+
     output_chances("chances B-A:", output_terminal_winsize_.ws_col * 3 / 16, chances_num, chances_denom);
     printf(NEW_LINE);
     output_chances("score B / A:", output_terminal_winsize_.ws_col * 3 / 16, score_B, score_A);
     printf(NEW_LINE);
 
-    printf(CURSOR_TO_LINE_START);
-    printf(ESC_PREFIX "%d" CURSOR_DOWN_SUFFIX, output_terminal_winsize_.ws_row / 8);
+    cursor_to_line_start();
+    cursor_move_by(0, output_terminal_winsize_.ws_row / 8);
 
-    printf(SAVE_CURSOR_POSITION);
+    cursor_save_position();
 
     bg_init(&bg, width);
 
     do {
-      printf(REST_CURSOR_POSITION);
+      cursor_restore_position();
 
       bits = bg_next_bit(&bg);
 
@@ -479,7 +445,8 @@ int main(int argc, char **argv)
 
       output(A, B, len_A, len_B, bits, width);
 
-      printf(CLEAR_LINE);
+      clear_entire_line();
+
       if (len_A == width) {
         ++score_A;
         printf("Finish: A\n");
@@ -493,12 +460,12 @@ int main(int argc, char **argv)
 
       printf("ESC = stop");
       kp = keypress();
-      printf(CLEAR_LINE_BEFORE);
+      clear_line_before();
     } while (kp != ESC);
 
     printf("ESC = exit");
     kp = keypress();
-    printf(CLEAR_LINE_BEFORE);
+    clear_line_before();
   } while (kp != ESC);
 
   return EXIT_SUCCESS;
