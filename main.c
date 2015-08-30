@@ -9,6 +9,9 @@
 
 #define ESC                   '\033'
 #define END_OF_FILE           '\004'
+#define ESC_PREFIX            "\x1b["
+#define ESC_DELIMITER         ";"
+#define COLOR_SUFFIX          "m"
 #define CURSOR_TO_UL          "\x1b[1;1f"
 #define CLEAR_SCREEN          "\x1b[2J"
 
@@ -43,12 +46,12 @@
 typedef uint64_t value_t;
 typedef struct {
   value_t value;
-  size_t bitCount;
+  size_t bits_count;
 } Bits_t;
 typedef struct {
   Bits_t bits;
   value_t mask;
-  size_t bitCountMax;
+  size_t bits_countMax;
 } Bit_generator_t;
 
 /**** global data ****/
@@ -76,8 +79,16 @@ const Bits_t *bg_next_bit(Bit_generator_t *bg);
 
 // ожидание кнопки и ее выдача
 int keypress(void);
+// вывод только одной строки с префиксом, заданного цвета,
+// и некотоорым кол-вом выделенных битов (начиная от старшего)
+// с заданным форматом и доведением до минимальной ширины (если width < min_width)
+void output_single(char prefix, int color, int bold_count, value_t value, int width, int min_width);
 // вывод
 void output(value_t A, value_t B, const Bits_t *bits, int width);
+
+// сравнить заданное начение с тестовым кортежем.
+// На выходе - длина равных битов начиная от старшего
+int compare(value_t value, const Bits_t *bits, int width);
 
 void reset_input_mode(void);
 void setup_terminal(void);
@@ -125,7 +136,7 @@ value_t brute_force(value_t A, int width)
 void bg_init(Bit_generator_t *bg, size_t bc)
 {
   memset(bg, 0, sizeof(Bit_generator_t));
-  bg->bitCountMax = bc;
+  bg->bits_countMax = bc;
   bg->mask = (0x01 << bc) - 0x01;
 }
 
@@ -134,7 +145,7 @@ const Bits_t *bg_next_bit(Bit_generator_t *bg)
   Bits_t *bits = &bg->bits;
   value_t ls_bit = random_bit();
   bits->value = ((bits->value << 0x01) | ls_bit) & bg->mask;
-  if (bits->bitCount < bg->bitCountMax) ++bits->bitCount;
+  if (bits->bits_count < bg->bits_countMax) ++bits->bits_count;
 
   return bits;
 }
@@ -156,70 +167,80 @@ void random_init(void)
 
 inline
 value_t fetch_bit(value_t V, size_t bit) {
-  return V & (0x01 << bit);
+  return ((V & (0x01 << bit)) != 0);
+}
+
+void output_single(char prefix, int color, int bold_count, value_t value, int width, int min_width)
+{
+  ssize_t idx;
+  value_t bit;
+  static const char BIT_CHAR[2] = {
+    [0] = '0',
+    [1] = '1'
+  };
+  char ch;
+
+  printf(ESC_PREFIX "%d" COLOR_SUFFIX "%c MSB ", color, prefix);
+
+  printf(ESC_PREFIX "%d" COLOR_SUFFIX, BOLD);
+  for (idx = width - 1; idx > width - 1 - bold_count; --idx) {
+    bit = fetch_bit(value, idx);
+    ch = BIT_CHAR[bit];
+    printf("%c ", ch);
+  }
+
+  printf(ESC_PREFIX "%d" COLOR_SUFFIX, RESET);
+  printf(ESC_PREFIX "%d" COLOR_SUFFIX, color);
+
+  for (; idx > -1; --idx) {
+    bit = fetch_bit(value, idx);
+    ch = BIT_CHAR[bit];
+    printf("%c ", ch);
+  }
+
+  for (idx = width; idx < min_width; ++idx) {
+    printf("  ");
+  }
+
+  printf("LSB" ESC_PREFIX "%d" COLOR_SUFFIX "\n", RESET);
+}
+
+int compare(value_t value, const Bits_t *bits, int width)
+{
+  int idx;
+  int length;
+  size_t bc = bits->bits_count;
+  value_t bv = bits->value;
+  value_t bit_value, bit_test;
+
+  for (idx = 0, length = 0; idx < bc; ++idx) {
+    bit_value = fetch_bit(value, width - idx - 1);
+    bit_test = fetch_bit(bv, bc - idx - 1);
+
+    if (bit_value == bit_test) {
+      ++length;
+      continue;
+    }
+
+    break;
+  }
+
+  return length;
 }
 
 void output(value_t A, value_t B, const Bits_t *bits, int width)
 {
-  ssize_t i;
-  value_t bit, bit_v;
-  value_t value = bits->value;
-  size_t bc = bits->bitCount;
-  ssize_t equal_length;
+  int len_A, len_B;
 
   printf(CLEAR_SCREEN);
   printf(CURSOR_TO_UL);
 
-  printf(COLOR(31) "A MSB ");
-  for (i = width - 1, equal_length = 0; i > -1; --i) {
-    bit = fetch_bit(A, i);
-    printf("%1d ", (int)(bit != 0));
-#ifdef USE_BOLD_FONT
-    if (equal_length != -1 && bc == width) {
-      bit_v = fetch_bit(value, i);
-      if (bit == bit_v) {
-        ++equal_length;
-        printf(COLOR(1) "%1d " COLOR(31), (int)(bit != 0));
-      } else {
-        equal_length = -1;
-        printf("%1d ", (int)(bit != 0));
-      }
-    }
-    else {
-      printf("%1d ", (int)(bit != 0));
-    }
-#endif
-  }
-  printf("LSB" COLOR(0) "\n");
+  len_A = compare(A, bits, width);
+  len_B = compare(B, bits, width);
 
-  printf("      ");
-  for (i = bc - 1; i > -1; --i) {
-    bit = fetch_bit(value, i);
-    printf("%1d ", (int)(bit != 1));
-  }
-  printf("\n");
-
-  printf(COLOR(32) "B MSB ");
-  for (i = width - 1, equal_length = 0; i > -1; --i) {
-    bit = fetch_bit(B, i);
-    printf("%1d ", (int)(bit != 0));
-#ifdef USE_BOLD_FONT
-    if (equal_length != -1 && bc == width) {
-      bit_v = fetch_bit(value, i);
-      if (bit == bit_v) {
-        ++equal_length;
-        printf(COLOR(1) "%1d " COLOR(31), (int)(bit != 0));
-      } else {
-        equal_length = -1;
-        printf("%1d ", (int)(bit != 0));
-      }
-    }
-    else {
-      printf("%1d ", (int)(bit != 0));
-    }
-#endif
-  }
-  printf("LSB" COLOR(0) "\n");
+  output_single('A', FG_RED, len_A, A, width, width);
+  output_single(' ', RESET, 0, bits->value, bits->bits_count, width);
+  output_single('B', FG_GREEN, len_B, B, width, width);
 }
 
 int keypress()
@@ -301,12 +322,12 @@ int main(int argc, char **argv)
       bits = bg_next_bit(&bg);
       output(A, B, bits, width);
 
-      if (bits->bitCount == width && A == bits->value) {
-        printf("A wins\n");
+      if (bits->bits_count == width && A == bits->value) {
+        printf("Finish: A\n");
         break;
       }
-      if (bits->bitCount == width && B == bits->value) {
-        printf("B wins\n");
+      if (bits->bits_count == width && B == bits->value) {
+        printf("Finish: B\n");
         break;
       }
 
