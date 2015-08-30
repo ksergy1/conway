@@ -7,6 +7,12 @@
 #include <termios.h>
 #include <unistd.h>
 
+#if 0
+#define LogPrint(fmt,...) do { fprintf(stderr, fmt "\n", ##__VA_ARGS__); } while(0)
+#else
+#define LogPrint(fmt, ...)
+#endif
+
 #define ESC                   '\033'
 #define END_OF_FILE           '\004'
 #define ESC_PREFIX            "\x1b["
@@ -101,11 +107,15 @@ value_t conway_single(value_t A, value_t B, int width)
   value_t A_, B_;
   value_t ret;
 
-  for (k = 0, A_ = A, B_ = B;
+  for (k = 0, A_ = A, B_ = B, ret = 0;
        k < width;
        maskA >>= 0x01, A_ = (A & maskA), B_ >>= 1, ++k) {
-    ret = (ret | (A_ == B_)) << 0x01;
+    ret = (ret << 0x01) | (A_ == B_);
+    LogPrint("  [%04x]: maskA: %04x, A_: %04x, B_: %04x, bit: %x, ret: %04x",
+             k, maskA, A_, B_, (A_ == B_), ret);
   }
+
+  LogPrint("-- %#x", ret);
 
   return ret;
 }
@@ -113,22 +123,35 @@ value_t conway_single(value_t A, value_t B, int width)
 double conway(value_t A, value_t B, int width)
 {
   value_t AA, AB, BB, BA;
+  double num, denom;
+  LogPrint("AA:");
   AA = conway_single(A, A, width);
+  LogPrint("AB:");
   AB = conway_single(A, B, width);
+  LogPrint("BB:");
   BB = conway_single(B, B, width);
+  LogPrint("BA:");
   BA = conway_single(B, A, width);
 
-  return ((double)(AA - AB)) / ((double)(BB - BA));
+  num = AA - AB;
+  denom = num + (BB - BA);
+
+  return num / denom;
 }
 
 value_t brute_force(value_t A, int width)
 {
   value_t limit = 1 << width;
-  value_t B;
+  value_t B = 0;
+  double c = conway(A, B, width);
 
   for (B = 0;
-       (!(conway(A, B, width) > 0.5)) && (B < limit);
-       ++B);
+       (!(c > 0.5)) && (B < limit);
+       ++B, c = conway(A, B, width)) {
+    LogPrint("A: %#0x, B: %#0x, c: %.6f", (int)A, (int)B, c);
+  }
+
+  LogPrint("A: %#0x, B: %#0x, c: %.6f", (int)A, (int)B, c);
 
   return B;
 }
@@ -166,7 +189,8 @@ void random_init(void)
 }
 
 inline
-value_t fetch_bit(value_t V, size_t bit) {
+value_t fetch_bit(value_t V, size_t bit)
+{
   return ((V & (0x01 << bit)) != 0);
 }
 
@@ -230,8 +254,7 @@ int compare(value_t value, int value_width, const Bits_t *bits)
 
 void output(value_t A, value_t B, int bold_A, int bold_B, const Bits_t *bits, int width)
 {
-  printf(CLEAR_SCREEN);
-  printf(CURSOR_TO_UL);
+  printf(CLEAR_SCREEN CURSOR_TO_UL);
 
   output_single('A', FG_RED, bold_A, A, width, width);
   output_single(' ', RESET, 0, bits->value, bits->bits_count, width);
@@ -243,11 +266,11 @@ int keypress()
   char c;
   read(STDIN_FILENO, &c, 1);
   return c;
-/********************
-  int k;
-  scanf("%d", &k);
-  return k;
-*********************/
+  /********************
+    int k;
+    scanf("%d", &k);
+    return k;
+  *********************/
 }
 
 void at_exit(void)
@@ -266,14 +289,14 @@ void setup_terminal(void)
   char *name;
 
   if (!isatty(STDIN_FILENO)) {
-    fprintf(stderr, "stdin is not terminal");
+    fprintf(stderr, "stdin is not terminal\n");
     exit(EXIT_FAILURE);
   }
 
   tcgetattr (STDIN_FILENO, &saved_terminal_attributes_);
   atexit (reset_input_mode);
   tcgetattr (STDIN_FILENO, &term_attr);
-  term_attr.c_lflag &= ~(ICANON|ECHO);
+  term_attr.c_lflag &= ~(ICANON | ECHO);
   term_attr.c_cc[VMIN] = 1;
   term_attr.c_cc[VTIME] = 0;
   tcsetattr (STDIN_FILENO, TCSAFLUSH, &term_attr);
@@ -307,6 +330,12 @@ int main(int argc, char **argv)
   }
 
   random_init();
+#if 0
+  width = 4;
+  A = 0x0b;
+  B = brute_force(A, width);
+  LogPrint("A: %#x, B: %#x", A, B);
+#endif
 
   do {
     A = random_value(width);
