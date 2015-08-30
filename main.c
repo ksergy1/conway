@@ -371,7 +371,7 @@ int main(int argc, char **argv)
     }
   }
 
-  if (!cursor_init()) {
+  if (!cursor_init(STDOUT_FILENO)) {
     perror("cursor_init");
     exit(EXIT_FAILURE);
   }
