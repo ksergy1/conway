@@ -385,6 +385,7 @@ int main(int argc, char **argv)
   value_t B;
   value_t AA, AB, BB, BA;
   value_t chances_num, chances_denom;
+  size_t score_A = 0, score_B = 0;
   int kp;
   int width;
   int lead_number_line_len;
@@ -449,7 +450,9 @@ int main(int argc, char **argv)
 
     printf(NEW_LINE);
     printf(CURSOR_TO_LINE_START);
-    output_chances("chances:", output_terminal_winsize_.ws_col * 3 / 16, chances_num, chances_denom);
+    output_chances("chances B-A:", output_terminal_winsize_.ws_col * 3 / 16, chances_num, chances_denom);
+    printf(NEW_LINE);
+    output_chances("score B / A:", output_terminal_winsize_.ws_col * 3 / 16, score_B, score_A);
     printf(NEW_LINE);
 
     printf(CURSOR_TO_LINE_START);
@@ -471,10 +474,12 @@ int main(int argc, char **argv)
 
       printf(CLEAR_LINE);
       if (len_A == width) {
+        ++score_A;
         printf("Finish: A\n");
         break;
       }
       if (len_B == width) {
+        ++score_B;
         printf("Finish: B\n");
         break;
       }
