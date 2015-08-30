@@ -275,20 +275,23 @@ void output_single(char prefix, int color, int bold_count, int shift, value_t va
     printf("  ");
   }
 
-  printf("LSB" ESC_PREFIX "%d" COLOR_SUFFIX "\n", RESET);
+  printf("LSB" ESC_PREFIX "%d" COLOR_SUFFIX, RESET);
 }
 
 void output(value_t A, value_t B, int bold_A, int bold_B, const Bits_t *bits, int width)
 {
   int horiz_shift = output_terminal_winsize_.ws_col / 4;
-/*
-  printf(ESC_PREFIX "%d" ESC_DELIMITER "%d" CURSOR_POSITION_SUFIX,
-         output_terminal_winsize_.ws_row / 4,
-         1);
-*/
+  /*
+    printf(ESC_PREFIX "%d" ESC_DELIMITER "%d" CURSOR_POSITION_SUFIX,
+           output_terminal_winsize_.ws_row / 4,
+           1);
+  */
   output_single('A', FG_RED, bold_A, horiz_shift, A, width, width);
+  printf(NEW_LINE);
   output_single(' ', RESET, 0, horiz_shift, bits->value, bits->bits_count, width);
+  printf(" <== next bit" NEW_LINE);
   output_single('B', FG_GREEN, bold_B, horiz_shift, B, width, width);
+  printf(NEW_LINE);
 }
 
 int output_lead_number(const char *prefix, int shift, value_t LN, int width)
@@ -395,8 +398,18 @@ int main(int argc, char **argv)
   char *end;
 
   if (argc != 2) {
+    printf("bit width = ");
+    scanf("%d", &width);
+#if 0
     printf("usage: %s width\n", argv[0] ? argv[0] : "n/a");
     exit(EXIT_SUCCESS);
+#endif
+  } else {
+    width = strtol(argv[1], &end, 10);
+    if (end == argv[1]) {
+      fprintf(stderr, "'%s' is not a number\n", argv[1]);
+      exit(EXIT_FAILURE);
+    }
   }
 
   atexit(at_exit);
@@ -405,12 +418,6 @@ int main(int argc, char **argv)
   setup_input_terminal();
 
   printf(CLEAR_SCREEN);
-
-  width = strtol(argv[1], &end, 10);
-  if (end == argv[1]) {
-    fprintf(stderr, "'%s' is not a number\n", argv[1]);
-    exit(EXIT_FAILURE);
-  }
 
   random_init();
 #if 0
