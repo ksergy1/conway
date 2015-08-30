@@ -4,8 +4,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
-#include <termios.h>
 #include <unistd.h>
+#include <errno.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 
 #if 0
 #define LogPrint(fmt,...) do { fprintf(stderr, fmt "\n", ##__VA_ARGS__); } while(0)
@@ -17,11 +19,27 @@
 #define END_OF_FILE           '\004'
 #define ESC_PREFIX            "\x1b["
 #define ESC_DELIMITER         ";"
+
 #define COLOR_SUFFIX          "m"
+#define CURSOR_POSITION_SUFIX "f"
+#define CURSOR_FORWARD_SUFFIX "C"
+#define CURSOR_DOWN_SUFFIX    "B"
+#define CURSOR_UP_SUFFIX      "A"
+#define CURSOR_BACK_SUFFIX    "D"
+
+#define SAVE_CURSOR_POSITION  "\x1b[s"
+#define REST_CURSOR_POSITION  "\x1b[u"
+
 #define CURSOR_TO_UL          "\x1b[1;1f"
+#define CURSOR_TO_LINE_START  "\x1b[1G"
+
 #define CLEAR_SCREEN          "\x1b[2J"
+#define CLEAR_LINE            "\x1b[2K"
+#define CLEAR_LINE_BEFORE     "\x1b[1K"
 
 #define COLOR(x)              "\x1b["#x"m"
+
+#define NEW_LINE              "\n"
 
 /* Not usable. Reference only. */
 #define RESET                 0
@@ -62,6 +80,11 @@ typedef struct {
 
 /**** global data ****/
 struct termios saved_terminal_attributes_;
+struct winsize output_terminal_winsize_;
+static const char BIT_CHAR[2] = {
+  [0] = '0',
+  [1] = '1'
+};
 
 /**** functions declarations ****/
 // подбор кортежа B исходя из A формата width
@@ -88,16 +111,22 @@ int keypress(void);
 // вывод только одной строки с префиксом, заданного цвета,
 // и некотоорым кол-вом выделенных битов (начиная от старшего)
 // с заданным форматом и доведением до минимальной ширины (если width < min_width)
-void output_single(char prefix, int color, int bold_count, value_t value, int width, int min_width);
+// положение по горизонтали = shift
+void output_single(char prefix, int color, int bold_count, int shift, value_t value, int width, int min_width);
 // вывод
 void output(value_t A, value_t B, int bold_A, int bold_B, const Bits_t *bits, int width);
+// вывести ведущее число. выдает - длину выведенной строки.
+int output_lead_number(const char *prefix, int shift, value_t LN, int width);
+
+void output_chances(const char *prefix, int shift, value_t num, value_t denom);
 
 // сравнить заданное начение с тестовым кортежем.
 // На выходе - длина равных битов начиная от старшего
 int compare(value_t value, int value_width, const Bits_t *bits);
 
 void reset_input_mode(void);
-void setup_terminal(void);
+void setup_input_terminal(void);
+void setup_output_terminal(void);
 
 /**** functions definitions ****/
 value_t conway_single(value_t A, value_t B, int width)
@@ -134,7 +163,7 @@ double conway(value_t A, value_t B, int width)
   BA = conway_single(B, A, width);
 
   num = AA - AB;
-  denom = num + (BB - BA);
+  denom = BB - BA;
 
   return num / denom;
 }
@@ -146,7 +175,7 @@ value_t brute_force(value_t A, int width)
   double c = conway(A, B, width);
 
   for (B = 0;
-       (!(c > 0.5)) && (B < limit);
+       (!(c > 1)) && (B < limit);
        ++B, c = conway(A, B, width)) {
     LogPrint("A: %#0x, B: %#0x, c: %.6f", (int)A, (int)B, c);
   }
@@ -194,16 +223,36 @@ value_t fetch_bit(value_t V, size_t bit)
   return ((V & (0x01 << bit)) != 0);
 }
 
-void output_single(char prefix, int color, int bold_count, value_t value, int width, int min_width)
+int compare(value_t value, int value_width, const Bits_t *bits)
+{
+  int idx;
+  int length;
+  size_t bc = bits->bits_count;
+  value_t bv = bits->value;
+  value_t bit_value, bit_test;
+
+  for (idx = 0, length = 0; idx < bc; ++idx) {
+    bit_value = fetch_bit(value, value_width - idx - 1);
+    bit_test = fetch_bit(bv, bc - idx - 1);
+
+    if (bit_value == bit_test) {
+      ++length;
+      continue;
+    }
+
+    break;
+  }
+
+  return length;
+}
+
+void output_single(char prefix, int color, int bold_count, int shift, value_t value, int width, int min_width)
 {
   ssize_t idx;
   value_t bit;
-  static const char BIT_CHAR[2] = {
-    [0] = '0',
-    [1] = '1'
-  };
   char ch;
 
+  printf(ESC_PREFIX "%d" CURSOR_FORWARD_SUFFIX, shift);
   printf(ESC_PREFIX "%d" COLOR_SUFFIX "%c MSB ", color, prefix);
 
   printf(ESC_PREFIX "%d" COLOR_SUFFIX, BOLD);
@@ -229,36 +278,43 @@ void output_single(char prefix, int color, int bold_count, value_t value, int wi
   printf("LSB" ESC_PREFIX "%d" COLOR_SUFFIX "\n", RESET);
 }
 
-int compare(value_t value, int value_width, const Bits_t *bits)
-{
-  int idx;
-  int length;
-  size_t bc = bits->bits_count;
-  value_t bv = bits->value;
-  value_t bit_value, bit_test;
-
-  for (idx = 0, length = 0; idx < bc; ++idx) {
-    bit_value = fetch_bit(value, value_width - idx - 1);
-    bit_test = fetch_bit(bv, bc - idx - 1);
-
-    if (bit_value == bit_test) {
-      ++length;
-      continue;
-    }
-
-    break;
-  }
-
-  return length;
-}
-
 void output(value_t A, value_t B, int bold_A, int bold_B, const Bits_t *bits, int width)
 {
-  printf(CLEAR_SCREEN CURSOR_TO_UL);
+  int horiz_shift = output_terminal_winsize_.ws_col / 4;
+/*
+  printf(ESC_PREFIX "%d" ESC_DELIMITER "%d" CURSOR_POSITION_SUFIX,
+         output_terminal_winsize_.ws_row / 4,
+         1);
+*/
+  output_single('A', FG_RED, bold_A, horiz_shift, A, width, width);
+  output_single(' ', RESET, 0, horiz_shift, bits->value, bits->bits_count, width);
+  output_single('B', FG_GREEN, bold_B, horiz_shift, B, width, width);
+}
 
-  output_single('A', FG_RED, bold_A, A, width, width);
-  output_single(' ', RESET, 0, bits->value, bits->bits_count, width);
-  output_single('B', FG_GREEN, bold_B, B, width, width);
+int output_lead_number(const char *prefix, int shift, value_t LN, int width)
+{
+  int idx;
+  char ch;
+  value_t bit;
+
+  printf(ESC_PREFIX "%d" CURSOR_FORWARD_SUFFIX, shift);
+  printf("%s MSB ", prefix);
+
+  for (idx = width - 1; idx > -1; --idx) {
+    bit = fetch_bit(LN, idx);
+    ch = BIT_CHAR[bit];
+    printf("%c ", ch);
+  }
+
+  printf("LSB");
+
+  return strlen(prefix) + 5 + (width * 2) + 3;
+}
+
+void output_chances(const char *prefix, int shift, value_t num, value_t denom)
+{
+  printf(ESC_PREFIX "%d" CURSOR_FORWARD_SUFFIX "%s %lu / %lu",
+         shift, prefix, (unsigned long)num, (unsigned long)denom);
 }
 
 int keypress()
@@ -275,6 +331,8 @@ int keypress()
 
 void at_exit(void)
 {
+  printf(ESC_PREFIX "%d" ESC_DELIMITER "%d" CURSOR_POSITION_SUFIX,
+         output_terminal_winsize_.ws_row - 1, 1);
   printf("Exiting\n");
 }
 
@@ -283,7 +341,7 @@ void reset_input_mode(void)
   tcsetattr(STDIN_FILENO, TCSANOW, &saved_terminal_attributes_);
 }
 
-void setup_terminal(void)
+void setup_input_terminal(void)
 {
   struct termios term_attr;
   char *name;
@@ -302,13 +360,34 @@ void setup_terminal(void)
   tcsetattr (STDIN_FILENO, TCSAFLUSH, &term_attr);
 }
 
+void setup_output_terminal(void)
+{
+  if (!isatty(STDOUT_FILENO)) {
+    fprintf(stderr, "stdout is not terminal\n");
+    exit(EXIT_FAILURE);
+  }
+
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &output_terminal_winsize_)) {
+    perror("ioctl(stdout)");
+    exit(EXIT_FAILURE);
+  }
+
+  if (setvbuf(stdout, NULL, _IONBF, 0)) {
+    perror("setvbuf(_IONBUF)");
+    exit(EXIT_FAILURE);
+  }
+}
+
 int main(int argc, char **argv)
 {
   /* usage: argv[0] <width> */
   value_t A;
   value_t B;
+  value_t AA, AB, BB, BA;
+  value_t chances_num, chances_denom;
   int kp;
   int width;
+  int lead_number_line_len;
   int len_A, len_B;
   Bit_generator_t bg;
   const Bits_t *bits;
@@ -321,7 +400,10 @@ int main(int argc, char **argv)
 
   atexit(at_exit);
 
-  setup_terminal();
+  setup_output_terminal();
+  setup_input_terminal();
+
+  printf(CLEAR_SCREEN);
 
   width = strtol(argv[1], &end, 10);
   if (end == argv[1]) {
@@ -340,15 +422,54 @@ int main(int argc, char **argv)
   A = random_value(width);
   B = brute_force(A, width);
 
+  AA = conway_single(A, A, width);
+  AB = conway_single(A, B, width);
+  BB = conway_single(B, B, width);
+  BA = conway_single(B, A, width);
+
+  chances_num = AA - AB;
+  chances_denom = BB - BA;
+
   do {
+    printf(CURSOR_TO_UL);
+    printf(ESC_PREFIX "%d" ESC_DELIMITER "%d" CURSOR_POSITION_SUFIX,
+           output_terminal_winsize_.ws_row / 8, 1);
+
+    lead_number_line_len = output_lead_number("AA", output_terminal_winsize_.ws_col / 8, AA, width);
+    printf(NEW_LINE);
+    output_lead_number("AB", output_terminal_winsize_.ws_col / 8, AB, width);
+
+    printf(ESC_PREFIX "%d" CURSOR_UP_SUFFIX, 1);
+    printf(CURSOR_TO_LINE_START);
+
+    output_lead_number("BB", output_terminal_winsize_.ws_col / 8 + lead_number_line_len + 3, BB, width);
+    printf(NEW_LINE);
+    output_lead_number("BA", output_terminal_winsize_.ws_col / 8 + lead_number_line_len + 3, BA, width);
+    printf(NEW_LINE);
+
+    printf(NEW_LINE);
+    printf(CURSOR_TO_LINE_START);
+    output_chances("chances:", output_terminal_winsize_.ws_col * 3 / 16, chances_num, chances_denom);
+    printf(NEW_LINE);
+
+    printf(CURSOR_TO_LINE_START);
+    printf(ESC_PREFIX "%d" CURSOR_DOWN_SUFFIX, output_terminal_winsize_.ws_row / 8);
+
+    printf(SAVE_CURSOR_POSITION);
+
     bg_init(&bg, width);
 
     do {
+      printf(REST_CURSOR_POSITION);
+
       bits = bg_next_bit(&bg);
+
       len_A = compare(A, width, bits);
       len_B = compare(B, width, bits);
+
       output(A, B, len_A, len_B, bits, width);
 
+      printf(CLEAR_LINE);
       if (len_A == width) {
         printf("Finish: A\n");
         break;
@@ -358,12 +479,14 @@ int main(int argc, char **argv)
         break;
       }
 
-      printf("ESC = stop\n");
+      printf("ESC = stop");
       kp = keypress();
+      printf(CLEAR_LINE_BEFORE);
     } while (kp != ESC);
 
-    printf("ESC = exit\n");
+    printf("ESC = exit");
     kp = keypress();
+    printf(CLEAR_LINE_BEFORE);
   } while (kp != ESC);
 
   return EXIT_SUCCESS;
